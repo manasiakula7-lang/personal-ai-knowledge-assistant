@@ -916,8 +916,14 @@ def page_settings():
         st.markdown(f"**{status['documents']}** documents, **{status['chunks']}** searchable passages.")
         if st.button("Refresh all documents", help="Re-reads every document. Needed after changing the search model."):
             bar = st.progress(0.0)
-            n = A.reindex_all(progress=lambda p, name: bar.progress(p, text=name))
-            st.success(f"Refreshed {n} documents.")
+            res = A.reindex_all(progress=lambda p, name: bar.progress(p, text=name))
+            bar.empty()
+            if res["refreshed"]:
+                st.success(f"Refreshed {res['refreshed']} of {res['total']} documents.")
+            for err in res["errors"]:
+                st.error(f"Couldn't refresh {err}")
+            if not res["errors"]:
+                st.rerun()
         with st.expander("Danger zone"):
             st.caption("Removes every document from your library. Your chats are kept.")
             if st.checkbox("I understand this can't be undone"):

@@ -143,7 +143,14 @@ def _load_pdf(data: bytes) -> List[Page]:
         return pages
     except ImportError:
         pass
-    from pypdf import PdfReader  # fallback
+    try:
+        from pypdf import PdfReader  # fallback
+    except ImportError as e:
+        raise ImportError(
+            "No PDF reader is installed in the Python that is running the app. Close the app, then in the project "
+            "folder run:  .venv\\Scripts\\activate  then  python -m pip install -r requirements-lite.txt  and start it "
+            "again with:  python -m streamlit run app.py"
+        ) from e
 
     reader = PdfReader(io.BytesIO(data))
     for i, page in enumerate(reader.pages, start=1):

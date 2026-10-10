@@ -159,3 +159,30 @@ class TestAPI(TempAssistantMixin, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSafeRefresh(TempAssistantMixin, unittest.TestCase):
+    def test_failed_refresh_keeps_index(self):
+        """A missing PDF package during refresh must not wipe the search index (bug seen on Windows)."""
+        from unittest import mock
+
+        self.load_samples()
+        before = self.a.store.count()
+        with mock.patch("src.chat.load_document", side_effect=ImportError("No module named 'pypdf'")):
+            res = self.a.reindex_all()
+        self.assertEqual(res["refreshed"], 0)
+        self.assertEqual(len(res["errors"]), 3)
+        self.assertEqual(self.a.store.count(), before)
+        self.assertEqual(len(self.a.memory.list_documents()), 3)
+
+    def test_refresh_recovers_orphaned_uploads(self):
+        """Documents whose database rows and vectors were lost are rebuilt from the uploads folder."""
+        self.load_samples()
+        before = self.a.store.count()
+        for d in self.a.memory.list_documents():  # simulate the damage the old refresh caused
+            self.a.memory.delete_document(d["doc_id"])
+        self.a.store.reset()
+        res = self.a.reindex_all()
+        self.assertEqual((res["refreshed"], res["errors"]), (3, []))
+        self.assertEqual(self.a.store.count(), before)
+        self.assertTrue(self.a.search("process scheduling"))

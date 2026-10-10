@@ -195,18 +195,39 @@ class KnowledgeAssistant:
         self.store.update_metadata({"doc_id": doc_id}, {"category": category})
         self.memory.update_document_category(doc_id, category)
 
-    def reindex_all(self, progress: Optional[Callable[[float, str], None]] = None) -> int:
-        """Re-embed every stored upload (use after switching embedding model)."""
-        docs = self.memory.list_documents()
-        self.store.reset()
-        for i, d in enumerate(docs):
-            path = Path(d["stored_path"] or "")
-            if path.exists():
-                self.memory.delete_document(d["doc_id"])
-                self.ingest_file(path.read_bytes(), d["file_name"], d["category"])
+    def reindex_all(self, progress: Optional[Callable[[float, str], None]] = None) -> Dict:
+        """Re-read and re-embed every saved upload (after switching embedding model, or to recover).
+
+        Safe by design: each file is read *before* its old index entries are removed, so a failure
+        (e.g. a missing PDF package) leaves that document exactly as it was. Files in the uploads folder
+        that lost their database entry are recovered too.
+        """
+        known = {d["doc_id"]: d for d in self.memory.list_documents()}
+        jobs: Dict[str, Dict] = {}
+        for d in known.values():
+            jobs[d["doc_id"]] = {"path": Path(d["stored_path"] or ""), "name": d["file_name"], "category": d["category"]}
+        for path in sorted(self.settings.uploads_dir.glob("*_*")):  # "<doc_id>_<file name>"
+            doc_id, _, name = path.name.partition("_")
+            if doc_id not in jobs and path.suffix.lower() in {".pdf", ".docx", ".txt", ".md", ".markdown"}:
+                jobs[doc_id] = {"path": path, "name": name, "category": "General"}
+
+        done, errors = 0, []
+        for i, (doc_id, job) in enumerate(jobs.items()):
+            path = job["path"]
+            try:
+                if not path.exists():
+                    raise FileNotFoundError("the saved copy of this file is missing; upload it again")
+                data = path.read_bytes()
+                load_document(data, job["name"])  # fail here, before touching the index
+                self.store.delete({"doc_id": doc_id})
+                self.memory.delete_document(doc_id)
+                self.ingest_file(data, job["name"], job["category"])
+                done += 1
+            except Exception as e:  # noqa: BLE001 - report per file, keep going
+                errors.append(f"{job['name']}: {e}")
             if progress:
-                progress((i + 1) / max(1, len(docs)), d["file_name"])
-        return len(docs)
+                progress((i + 1) / max(1, len(jobs)), job["name"])
+        return {"refreshed": done, "total": len(jobs), "errors": errors}
 
     # ================================================================ search
     def search(self, query: str, k: Optional[int] = None, doc_ids: Optional[Sequence[str]] = None,
